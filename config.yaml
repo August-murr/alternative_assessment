@@ -1,0 +1,37 @@
+data:
+  kaggle_dataset: olistbr/brazilian-ecommerce
+  raw_dir: data/raw
+  processed_dir: data/processed
+  test_fraction: 0.2         # last 20% of orders by purchase time -> test
+  censor_cutoff: auto        # "auto" or an ISO date; orders purchased after it are dropped
+  rekey_ids: true
+
+modal:
+  app_name: olist-agent
+  cpu: 4.0
+  memory_mb: 8192
+  timeout_s: 3600            # hard wall-clock limit for the agent sandbox
+
+agent:
+  model: claude-sonnet-5-5
+  effort: low                # low | medium | high | xhigh | max (model-dependent); null = model default
+  max_turns: null            # agentic turns; null = unlimited
+  max_budget_usd: null       # client-side estimated spend cap; null = unlimited
+  task_dir: tasks/olist
+  claude_code_version: latest   # "latest", "stable", or an exact version like 2.1.301
+  # Only these built-in tools are available to the agent (claude --tools). Everything else
+  # (scheduling, remote triggers, notifications, subagents, worktrees, ...) is removed.
+  tools: [Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch]
+  disable_slash_commands: true  # no skills / slash commands
+  env:
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"           # strip credentials from Bash/hook subprocess envs
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"   # no telemetry / feature-flag fetching
+    BASH_DEFAULT_TIMEOUT_MS: "300000"               # 5 min default per shell command
+    BASH_MAX_TIMEOUT_MS: "1800000"                  # agent may request up to 30 min per command
+
+evaluation:                  # network-blocked sandbox that re-runs the submission
+  cpu: 4.0
+  memory_mb: 8192
+  timeout_s: 2400
+  train_timeout_s: 1200      # limit for train.py (told to the agent)
+  predict_timeout_s: 300     # limit for predict.py (told to the agent)

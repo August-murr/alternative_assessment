@@ -1,0 +1,4 @@
+# Agent sandbox gets /data/train; workspace_files are copied into /workspace/.
+train_data: true
+workspace_files: [DATA.md]
+evaluator: olist
