@@ -10,13 +10,16 @@ modal:
   app_name: olist-agent
   cpu: 4.0
   memory_mb: 8192
-  timeout_s: 3600            # hard wall-clock limit for the agent sandbox
+  timeout_s: 3600            # hard wall-clock limit for the agent sandbox (covers all iterations)
 
 agent:
+  iterations: 3              # checkpoints per run; 1 = one-shot
+  iteration_timeout_s: 900   # limit for one claude -p call (one iteration or one fix attempt)
+  max_fix_attempts: 2        # extra calls allowed when a checkpoint fails verification
   model: claude-sonnet-5-5
   effort: low                # low | medium | high | xhigh | max (model-dependent); null = model default
-  max_turns: null            # agentic turns; null = unlimited
-  max_budget_usd: null       # client-side estimated spend cap; null = unlimited
+  max_turns: null            # agentic turns per call; null = unlimited
+  max_budget_usd: null       # estimated spend cap per call; null = unlimited
   task_dir: tasks/olist
   claude_code_version: latest   # "latest", "stable", or an exact version like 2.1.301
   # Only these built-in tools are available to the agent (claude --tools). Everything else
@@ -35,3 +38,7 @@ evaluation:                  # network-blocked sandbox that re-runs the submissi
   timeout_s: 2400
   train_timeout_s: 1200      # limit for train.py (told to the agent)
   predict_timeout_s: 300     # limit for predict.py (told to the agent)
+
+pricing:                     # Modal Sandbox rates (https://modal.com/pricing), used for the cost estimate
+  sandbox_cpu_core_s: 0.00003942
+  sandbox_memory_gib_s: 0.00000667

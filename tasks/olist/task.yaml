@@ -1,4 +1,6 @@
-# Agent sandbox gets /data/train; workspace_files are copied into /workspace/.
-train_data: true
+# Prompt templates (${placeholders} are filled by pipeline/run.py):
+#   PROMPT.md   first iteration (full task + iteration protocol)
+#   ITERATE.md  every later iteration (sent with --resume)
+#   FIX.md      when a checkpoint fails verification
+# workspace_files are copied into /workspace/ in the agent sandbox.
 workspace_files: [DATA.md]
-evaluator: olist
