@@ -1,0 +1,96 @@
+--- a/CHECKPOINT.md
++++ b/CHECKPOINT.md
+@@ -1,5 +1,5 @@
+-# Checkpoint 9
+-Change: Retried product size features without category (total weight, max package volume); reverted from FEATS.
+-Why: Heavy or bulky parcels may ship slower; iteration 4 failed likely because of the category column.
+-Validation PR-AUC: 0.2318 -> 0.2289 (reverted state: 0.2318)
+-Decision: reverted, PR-AUC dropped 0.0029 and ROC-AUC dropped 0.6816 -> 0.6740. Product features don't help here, whether or not category is included.
++# Checkpoint 10
++Change: Averaged 5 LightGBM models trained with different random seeds.
++Why: Subsampling makes single models noisy, so averaging should give more stable probabilities on the unseen period.
++Validation PR-AUC: 0.2318 -> 0.2320
++Decision: kept; the gain is negligible (+0.0002, ROC-AUC 0.6816 -> 0.6808) but it costs only seconds and reduces variance.
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -10,3 +10,4 @@
+ 9. Regularized params (done, hand-picked); next: small search of params, then retry weight/volume features
+ 10. Final tuning/seed averaging, report cleanup
+ - Iter 9 retry of weight\/volume: worse, dropped. Product features are closed.
++- Iter 10: 5-seed averaging: PR-AUC 0.2320, kept
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -1,15 +1,41 @@
+-# Report
++# Final report
++
+ ## Approach
+-LightGBM (defaults) on order-level features: item count, price sum, freight sum, promised days (estimated date - purchase time), purchase hour/day-of-week, customer state. All are known at purchase time and use only the order itself.
+-## Validation (pseudo test, last 20%)
+-- Iter 1: PR-AUC 0.2051 (ROC-AUC 0.6472, Brier 0.1057)
+-- Iter 2: added seller_state, same_state, n_sellers: PR-AUC 0.2205 (ROC-AUC 0.6663, Brier 0.1048)
+-- Iter 3: added dist_km: PR-AUC 0.2184 (ROC-AUC 0.6630, Brier 0.1049), slightly worse, kept (see CHECKPOINT)
+-- Iter 4: product features (category, weight, volume): PR-AUC 0.2138, worse, reverted (back to 0.2184)
+-- Iter 5: payment features: PR-AUC 0.2171 (ROC-AUC 0.6701, Brier 0.1050), PR-AUC slightly lower, ROC-AUC higher, kept
+-- Iter 6: past-only seller history (count, smoothed late rate): PR-AUC 0.2048, worse, not used (back to 0.2171). Also fixed pay_type dtype bug, no score effect.
+-- Iter 7: calendar features (month, day of month, est weekday): PR-AUC 0.1779, much worse, not used (back to 0.2171)
+-- Iter 8: regularized LightGBM params: PR-AUC 0.2318 (ROC-AUC 0.6816, Brier 0.1044), kept
+-- Iter 9: weight and max volume only: PR-AUC 0.2289, worse, not used (back to 0.2318)
++One row per order. Features are built in `features.py` from the order, its items, payments, customer, seller and geolocation tables. A LightGBM classifier (regularized, 5-seed average) predicts `p_late`. `train.py` fits and saves the models; `predict.py` rebuilds the same features and averages the models.
++
++## Final features (all known at purchase time, using only the order itself)
++- n_items, price sum, freight sum, n_sellers
++- est_days: promised delivery date minus purchase time (the promise is made at purchase)
++- purchase hour and weekday
++- customer_state, seller_state (first item), same_state flag
++- dist_km: seller to customer haversine distance, from mean coordinates per zip prefix in `geolocation.csv`
++- payment: max installments, total payment value, number of payments, main payment type
++
++No label, delivery date or other post-purchase column is used as a model input. No feature uses other orders in the file being predicted. `train_labels.csv` is only read as the training target. Nothing is hardcoded.
++
++## Model
++LightGBM: 300 trees, lr 0.02, 15 leaves, min_child_samples 100, subsample 0.8, colsample 0.7, L2 5, 5 seeds averaged. Training takes a few seconds, prediction about 2 seconds.
++
++## Validation (pseudo test, last 20% of orders; positive rate 11.9%)
++| iter | change | PR-AUC | decision |
++|---|---|---|---|
++| 1 | baseline, 7 features, default LGBM | 0.2051 | kept |
++| 2 | seller state, same-state, n_sellers | 0.2205 | kept |
++| 3 | seller-customer distance | 0.2184 | kept (within noise) |
++| 4 | product category, weight, volume | 0.2138 | reverted |
++| 5 | payment features | 0.2171 | kept (ROC-AUC up) |
++| 6 | past-only seller history | 0.2048 | not used |
++| 7 | month, day of month, est weekday | 0.1779 | not used |
++| 8 | regularized LightGBM | 0.2318 | kept |
++| 9 | weight, max volume only | 0.2289 | not used |
++| 10 | 5-seed averaging | 0.2320 | kept |
++
++Final pseudo-test scores: PR-AUC 0.2320, ROC-AUC 0.6808, Brier 0.1044.
++
+ ## Known weaknesses
+-Minimal baseline; no seller, geo, product or history features. Training data lacks in-transit late orders.
++- Signal is weak overall (ROC-AUC about 0.68). Most lateness comes from carrier events we cannot see at purchase.
++- Pseudo-test differences of about 0.002 are within noise (about 1.5k positives), so iterations 3 and 5 were kept on plausibility, not clear gains.
++- Distribution shift: the training snapshot lacks late orders still in transit, and the late rate in the later period differs (6.9% overall vs 11.9% in the last 20%). Probabilities are likely under-calibrated for the test period.
++- Time-based features (month) and history features (seller late rate) hurt, so the model has no information about seller track record or seasonality. A better history feature (out-of-fold, matched between train and test) is the main untried idea.
++- Dead helper code (`hist_train`, `hist_apply`) remains in `features.py`; its output columns are not in `FEATS`.
++- Hyperparameters were hand-picked, not searched.
+--- a/predict.py
++++ b/predict.py
+@@ -6,5 +6,5 @@
+ o = hist_apply(o, table, prior)
+ for c, cc in cats.items():
+     o[c] = pd.Categorical(o[c].astype(object), categories=cc)
+-o["p_late"] = m.predict_proba(o[FEATS])[:, 1]
++o["p_late"] = sum(x.predict_proba(o[FEATS])[:, 1] for x in m) / len(m)
+ o[["order_id", "p_late"]].to_csv(a.output, index=False)
+--- a/train.py
++++ b/train.py
+@@ -5,6 +5,6 @@
+ lab = pd.read_csv(f"{a.data_dir}/train_labels.csv")
+ o, table, prior = hist_train(o, lab)
+ cats = {c: list(o[c].cat.categories) for c in ["customer_state", "seller_state", "pay_type"]}
+-m = lgb.LGBMClassifier(n_estimators=300, learning_rate=0.02, num_leaves=15, min_child_samples=100, subsample=0.8, subsample_freq=1, colsample_bytree=0.7, reg_lambda=5, verbose=-1).fit(o[FEATS], o.is_late)
++m = [lgb.LGBMClassifier(random_state=s, n_estimators=300, learning_rate=0.02, num_leaves=15, min_child_samples=100, subsample=0.8, subsample_freq=1, colsample_bytree=0.7, reg_lambda=5, verbose=-1).fit(o[FEATS], o.is_late) for s in range(5)]
+ os.makedirs(a.model_dir, exist_ok=True)
+ joblib.dump((m, cats, table, prior), f"{a.model_dir}/model.pkl")

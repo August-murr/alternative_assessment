@@ -1,0 +1,41 @@
+--- a/CHECKPOINT.md
++++ b/CHECKPOINT.md
+@@ -1,5 +1,5 @@
+-# Checkpoint 7
+-Change: Tried calendar features (purchase month, day of month, promised-date weekday); reverted from FEATS.
+-Why: Seasonal peaks and holidays may raise late rates.
+-Validation PR-AUC: 0.2171 -> 0.1779 (reverted state: 0.2171)
+-Decision: reverted, PR-AUC dropped 0.039. Training covers each calendar month once or twice, so month/day-of-month mostly memorize specific past events and don't generalize to a later period.
++# Checkpoint 8
++Change: Regularized LightGBM (300 trees, lr 0.02, 15 leaves, min_child_samples 100, subsampling, L2 5) instead of defaults.
++Why: Default settings overfit a small, noisy target (about 7% positives); stronger regularization generalizes better to a later period.
++Validation PR-AUC: 0.2171 -> 0.2318
++Decision: kept, PR-AUC improved by 0.0147 (ROC-AUC 0.6701 -> 0.6816, Brier 0.1050 -> 0.1044). Hand-picked, not searched.
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -7,5 +7,5 @@
+ 6. Seller history: tried, worse, not used (history mismatch between train and test; maybe retry with out-of-fold)
+ 7. Customer-state/route historical late rate (past-only)
+ 8. Calendar features: tried, much worse, not used (memorizes past events)
+-9. Hyperparameter tuning (optuna, time-split)
++9. Regularized params (done, hand-picked); next: small search of params, then retry weight/volume features
+ 10. Final tuning/seed averaging, report cleanup
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -9,5 +9,6 @@
+ - Iter 5: payment features: PR-AUC 0.2171 (ROC-AUC 0.6701, Brier 0.1050), PR-AUC slightly lower, ROC-AUC higher, kept
+ - Iter 6: past-only seller history (count, smoothed late rate): PR-AUC 0.2048, worse, not used (back to 0.2171). Also fixed pay_type dtype bug, no score effect.
+ - Iter 7: calendar features (month, day of month, est weekday): PR-AUC 0.1779, much worse, not used (back to 0.2171)
++- Iter 8: regularized LightGBM params: PR-AUC 0.2318 (ROC-AUC 0.6816, Brier 0.1044), kept
+ ## Known weaknesses
+ Minimal baseline; no seller, geo, product or history features. Training data lacks in-transit late orders.
+--- a/train.py
++++ b/train.py
+@@ -5,6 +5,6 @@
+ lab = pd.read_csv(f"{a.data_dir}/train_labels.csv")
+ o, table, prior = hist_train(o, lab)
+ cats = {c: list(o[c].cat.categories) for c in ["customer_state", "seller_state", "pay_type"]}
+-m = lgb.LGBMClassifier(verbose=-1).fit(o[FEATS], o.is_late)
++m = lgb.LGBMClassifier(n_estimators=300, learning_rate=0.02, num_leaves=15, min_child_samples=100, subsample=0.8, subsample_freq=1, colsample_bytree=0.7, reg_lambda=5, verbose=-1).fit(o[FEATS], o.is_late)
+ os.makedirs(a.model_dir, exist_ok=True)
+ joblib.dump((m, cats, table, prior), f"{a.model_dir}/model.pkl")

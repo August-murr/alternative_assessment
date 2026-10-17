@@ -1,0 +1,51 @@
+--- a/CHECKPOINT.md
++++ b/CHECKPOINT.md
+@@ -1,5 +1,5 @@
+-# Checkpoint 8
+-Change: Regularized LightGBM (300 trees, lr 0.02, 15 leaves, min_child_samples 100, subsampling, L2 5) instead of defaults.
+-Why: Default settings overfit a small, noisy target (about 7% positives); stronger regularization generalizes better to a later period.
+-Validation PR-AUC: 0.2171 -> 0.2318
+-Decision: kept, PR-AUC improved by 0.0147 (ROC-AUC 0.6701 -> 0.6816, Brier 0.1050 -> 0.1044). Hand-picked, not searched.
++# Checkpoint 9
++Change: Retried product size features without category (total weight, max package volume); reverted from FEATS.
++Why: Heavy or bulky parcels may ship slower; iteration 4 failed likely because of the category column.
++Validation PR-AUC: 0.2318 -> 0.2289 (reverted state: 0.2318)
++Decision: reverted, PR-AUC dropped 0.0029 and ROC-AUC dropped 0.6816 -> 0.6740. Product features don't help here, whether or not category is included.
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -9,3 +9,4 @@
+ 8. Calendar features: tried, much worse, not used (memorizes past events)
+ 9. Regularized params (done, hand-picked); next: small search of params, then retry weight/volume features
+ 10. Final tuning/seed averaging, report cleanup
++- Iter 9 retry of weight\/volume: worse, dropped. Product features are closed.
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -10,5 +10,6 @@
+ - Iter 6: past-only seller history (count, smoothed late rate): PR-AUC 0.2048, worse, not used (back to 0.2171). Also fixed pay_type dtype bug, no score effect.
+ - Iter 7: calendar features (month, day of month, est weekday): PR-AUC 0.1779, much worse, not used (back to 0.2171)
+ - Iter 8: regularized LightGBM params: PR-AUC 0.2318 (ROC-AUC 0.6816, Brier 0.1044), kept
++- Iter 9: weight and max volume only: PR-AUC 0.2289, worse, not used (back to 0.2318)
+ ## Known weaknesses
+ Minimal baseline; no seller, geo, product or history features. Training data lacks in-transit late orders.
+--- a/features.py
++++ b/features.py
+@@ -5,6 +5,10 @@
+     o = pd.read_csv(f"{d}/orders.csv", parse_dates=["order_purchase_timestamp", "order_estimated_delivery_date"])
+     it = pd.read_csv(f"{d}/order_items.csv")
+     c = pd.read_csv(f"{d}/customers.csv")
++    pr = pd.read_csv(f"{d}/products.csv")
++    pr["vol"] = pr.product_length_cm * pr.product_height_cm * pr.product_width_cm
++    it = it.merge(pr[["product_id", "product_weight_g", "vol"]], on="product_id", how="left")
++    pg2 = it.groupby("order_id").agg(weight=("product_weight_g", "sum"), max_vol=("vol", "max"))
+     s = pd.read_csv(f"{d}/sellers.csv")
+     it = it.merge(s[["seller_id", "seller_state", "seller_zip_code_prefix"]], on="seller_id", how="left")
+     first = it.sort_values("order_item_id").groupby("order_id").seller_state.first().rename("seller_state")
+@@ -15,7 +19,7 @@
+     pg = pay.groupby("order_id").agg(installments=("payment_installments", "max"), pay_value=("payment_value", "sum"), n_pay=("payment_sequential", "count"))
+     ptype = pay.sort_values("payment_value", ascending=False).groupby("order_id").payment_type.first().rename("pay_type")
+     g = it.groupby("order_id").agg(n_items=("order_item_id", "count"), price=("price", "sum"), freight=("freight_value", "sum"))
+-    g = g.join(first).join(fsel).join(szip).join(nsel).join(pg).join(ptype)
++    g = g.join(first).join(fsel).join(szip).join(nsel).join(pg2).join(pg).join(ptype)
+     o = o.merge(g, on="order_id", how="left").merge(c[["customer_id", "customer_state", "customer_zip_code_prefix"]], on="customer_id", how="left")
+     geo = pd.read_csv(f"{d}/geolocation.csv").groupby("geolocation_zip_code_prefix")[["geolocation_lat", "geolocation_lng"]].mean()
+     for p, col in (("c", "customer_zip_code_prefix"), ("s", "seller_zip_code_prefix")):

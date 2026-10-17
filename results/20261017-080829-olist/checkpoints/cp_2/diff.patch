@@ -1,0 +1,78 @@
+--- a/CHECKPOINT.md
++++ b/CHECKPOINT.md
+@@ -1,5 +1,5 @@
+-# Checkpoint 1
+-Change: Minimal baseline, default LightGBM on 7 order-level features.
+-Why: Establish a reference score and a working train/predict pipeline.
+-Validation PR-AUC: none -> 0.2051
+-Decision: kept, it is the baseline.
++# Checkpoint 2
++Change: Added seller features (seller state of first item, same-state flag, number of sellers).
++Why: Seller-to-customer distance drives delivery time, and state match is a cheap proxy.
++Validation PR-AUC: 0.2051 -> 0.2205
++Decision: kept, PR-AUC improved by 0.0154.
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -1,6 +1,6 @@
+ # Plan (one change per iteration)
+ 1. Baseline: few order features, default LightGBM (done)
+-2. Seller features: seller state, seller-customer same-state flag
++2. Seller features (done)
+ 3. Geo distance seller->customer via geolocation
+ 4. Product features: category, weight, volume
+ 5. Payment features: type, installments, value
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -3,5 +3,6 @@
+ LightGBM (defaults) on order-level features: item count, price sum, freight sum, promised days (estimated date - purchase time), purchase hour/day-of-week, customer state. All are known at purchase time and use only the order itself.
+ ## Validation (pseudo test, last 20%)
+ - Iter 1: PR-AUC 0.2051 (ROC-AUC 0.6472, Brier 0.1057)
++- Iter 2: added seller_state, same_state, n_sellers: PR-AUC 0.2205 (ROC-AUC 0.6663, Brier 0.1048)
+ ## Known weaknesses
+ Minimal baseline; no seller, geo, product or history features. Training data lacks in-transit late orders.
+--- a/features.py
++++ b/features.py
+@@ -4,13 +4,20 @@
+     o = pd.read_csv(f"{d}/orders.csv", parse_dates=["order_purchase_timestamp", "order_estimated_delivery_date"])
+     it = pd.read_csv(f"{d}/order_items.csv")
+     c = pd.read_csv(f"{d}/customers.csv")
++    s = pd.read_csv(f"{d}/sellers.csv")
++    it = it.merge(s[["seller_id", "seller_state"]], on="seller_id", how="left")
++    first = it.sort_values("order_item_id").groupby("order_id").seller_state.first().rename("seller_state")
++    nsel = it.groupby("order_id").seller_id.nunique().rename("n_sellers")
+     g = it.groupby("order_id").agg(n_items=("order_item_id", "count"), price=("price", "sum"), freight=("freight_value", "sum"))
++    g = g.join(first).join(nsel)
+     o = o.merge(g, on="order_id", how="left").merge(c[["customer_id", "customer_state"]], on="customer_id", how="left")
+     t = o.order_purchase_timestamp
+     o["est_days"] = (o.order_estimated_delivery_date - t).dt.total_seconds() / 86400
+     o["hour"] = t.dt.hour
+     o["dow"] = t.dt.dayofweek
++    o["same_state"] = (o.customer_state == o.seller_state).astype(float)
+     o["customer_state"] = o.customer_state.astype("category")
++    o["seller_state"] = o.seller_state.astype("category")
+     return o
+ 
+-FEATS = ["n_items", "price", "freight", "est_days", "hour", "dow", "customer_state"]
++FEATS = ["n_items", "price", "freight", "est_days", "hour", "dow", "customer_state", "seller_state", "same_state", "n_sellers"]
+--- a/predict.py
++++ b/predict.py
+@@ -3,6 +3,7 @@
+ a = argparse.ArgumentParser(); a.add_argument("--model-dir"); a.add_argument("--data-dir"); a.add_argument("--output"); a = a.parse_args()
+ m, cats = joblib.load(f"{a.model_dir}/model.pkl")
+ o = build(a.data_dir)
+-o["customer_state"] = pd.Categorical(o.customer_state.astype(object), categories=cats)
++for c, cc in cats.items():
++    o[c] = pd.Categorical(o[c].astype(object), categories=cc)
+ o["p_late"] = m.predict_proba(o[FEATS])[:, 1]
+ o[["order_id", "p_late"]].to_csv(a.output, index=False)
+--- a/train.py
++++ b/train.py
+@@ -4,7 +4,7 @@
+ o = build(a.data_dir)
+ y = pd.read_csv(f"{a.data_dir}/train_labels.csv")[["order_id", "is_late"]]
+ o = o.merge(y, on="order_id")
+-cats = list(o.customer_state.cat.categories)
++cats = {c: list(o[c].cat.categories) for c in ["customer_state", "seller_state"]}
+ m = lgb.LGBMClassifier(verbose=-1).fit(o[FEATS], o.is_late)
+ os.makedirs(a.model_dir, exist_ok=True)
+ joblib.dump((m, cats), f"{a.model_dir}/model.pkl")

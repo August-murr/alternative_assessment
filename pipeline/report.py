@@ -16,6 +16,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.patheffects as pe  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
 from pipeline.config import ROOT  # noqa: E402
@@ -114,77 +115,106 @@ def _style(ax) -> None:
     ax.set_axisbelow(True)
 
 
+SOURCES = (("api_cost", "Claude API", SERIES[0]),
+           ("modal_agent_cost", "Modal agent sandbox", SERIES[1]),
+           ("modal_eval_cost", "Modal eval sandbox", SERIES[2]))
+BASELINE_FILL = "#d9d8d3"
+
+
+def attribute_gains(rows: list[dict], positive_rate: float) -> list[list[float]]:
+    """Cumulative test PR-AUC gain per cost source, at each checkpoint (index 0 = start).
+
+    Each checkpoint's score change (vs the previous scored checkpoint; vs a random model for the
+    first) is split across the sources in proportion to what each cost in that checkpoint.
+    A checkpoint that didn't change the score (e.g. a reverted attempt) adds cost but no gain.
+    """
+    cum = [[0.0] for _ in SOURCES]
+    prev = positive_rate
+    for r in rows:
+        score = r["test_pr_auc"]
+        gain = (score - prev) if score is not None else 0.0
+        prev = score if score is not None else prev
+        spend = sum(r[k] for k, _, _ in SOURCES) or 1.0
+        for layer, (key, _, _) in zip(cum, SOURCES):
+            layer.append(layer[-1] + gain * r[key] / spend)
+    return cum
+
+
 def plot_progress(rows: list[dict], positive_rate: float | None, out: Path) -> None:
-    """Two aligned panels: score per checkpoint (top), cumulative cost stacked by source (bottom)."""
-    fig, (top, bottom) = plt.subplots(2, 1, figsize=(9, 7), sharex=True, facecolor=SURFACE,
-                                      gridspec_kw={"height_ratios": [1, 1], "hspace": 0.12})
-    for ax in (top, bottom):
-        _style(ax)
-    n = len(rows)
-    xs = list(range(n + 1))  # 0 = start (no spend yet), k = checkpoint k
+    """Test PR-AUC vs cumulative spend; the area under the curve is stacked by the cost source that paid for it."""
+    positive_rate = positive_rate or 0.0
+    fig, ax = plt.subplots(figsize=(9.5, 5.4), facecolor=SURFACE)
+    _style(ax)
+    xs = [0.0] + [r["cumulative_cost"] for r in rows]
+    gains = attribute_gains(rows, positive_rate)
+    base = [positive_rate] * len(xs)
+    totals = [positive_rate + sum(layer[i] for layer in gains) for i in range(len(xs))]
 
-    # Top: score per checkpoint.
-    for key, label, color in (("test_pr_auc", "Test PR-AUC (held out)", SERIES[0]),
-                              ("val_pr_auc", "Validation PR-AUC (agent's pseudo test)", SERIES[1])):
-        pts = [(r["checkpoint"], r[key]) for r in rows if r[key] is not None]
-        if not pts:
-            continue
-        px, py = zip(*pts)
-        top.plot(px, py, color=color, linewidth=2, marker="o", markersize=8, markeredgecolor=SURFACE,
-                 markeredgewidth=2, label=label, zorder=3)
-        top.annotate(label.split(" (")[0], (px[-1], py[-1]), xytext=(12, 0), textcoords="offset points",
-                     color=TEXT, fontsize=9, va="center", annotation_clip=False)
-        if key == "test_pr_auc":
-            for x, y in pts:
-                top.annotate(f"{y:.3f}", (x, y), xytext=(0, -15), textcoords="offset points", ha="center",
-                             color=TEXT_2, fontsize=8)
-    if positive_rate:
-        top.axhline(positive_rate, color=TEXT_2, linewidth=1, linestyle=(0, (4, 3)), zorder=2)
-        top.annotate("random model (test)", (0, positive_rate), xytext=(4, 4), textcoords="offset points",
-                     color=TEXT_2, fontsize=8)
-    top_max = max([r[k] for r in rows for k in ("test_pr_auc", "val_pr_auc") if r[k] is not None] or [0.1])
-    top.set_ylim(0, top_max * 1.3)
-    top.set_ylabel("PR-AUC", color=TEXT, fontsize=10)
-    top.set_title("Score and cumulative cost per checkpoint", color=TEXT, fontsize=13, loc="left", pad=12)
-    top.legend(frameon=False, fontsize=9, labelcolor=TEXT, ncol=2, loc="upper left")
+    ax.stackplot(xs, base, *gains, colors=[BASELINE_FILL] + [c for _, _, c in SOURCES],
+                 edgecolor=SURFACE, linewidth=2, zorder=2)
+    ax.plot(xs, totals, color=TEXT, linewidth=1.2, zorder=3)
+    ax.plot(xs[1:], totals[1:], linestyle="none", marker="o", markersize=7, color=TEXT,
+            markeredgecolor=SURFACE, markeredgewidth=2, zorder=4)
+    # Label scores where they change: the first, best and last always, others only where they don't
+    # crowd an already-placed label. Checkpoint names go along the axis, thinned the same way.
+    span, y_span = (xs[-1] or 1.0), (max(totals) or 1.0)
+    candidates, prev_text = [], None
+    for i, (x, total, r) in enumerate(zip(xs[1:], totals[1:], rows)):
+        text = f"{r['test_pr_auc']:.3f}" if r["test_pr_auc"] is not None else None
+        if text and text != prev_text:
+            candidates.append((i, x, total, text))
+        prev_text = text or prev_text
+    must = {candidates[0][0], candidates[-1][0], max(candidates, key=lambda c: c[2])[0]} if candidates else set()
+    placed = [c for c in candidates if c[0] in must]
 
-    # Bottom: cumulative cost stacked by source (each band = how much that source has cost so far).
-    sources = (("api_cost", "Claude API (estimate)", SERIES[0]),
-               ("modal_agent_cost", "Modal agent sandbox", SERIES[1]),
-               ("modal_eval_cost", "Modal eval sandbox", SERIES[2]))
-    layers = []
-    for key, _, _ in sources:
-        cum, total = [0.0], 0.0
-        for r in rows:
-            total += r[key]
-            cum.append(total)
-        layers.append(cum)
-    bottom.stackplot(xs, *layers, colors=[c for _, _, c in sources], labels=[l for _, l, _ in sources],
-                     edgecolor=SURFACE, linewidth=2, alpha=0.92, zorder=2)
-    totals = [sum(layer[i] for layer in layers) for i in xs]
-    bottom.plot(xs, totals, color=TEXT, linewidth=1, zorder=3)
-    for x, t in zip(xs[1:], totals[1:]):
-        bottom.annotate(f"${t:.3f}", (x, t), xytext=(0, 6), textcoords="offset points", ha="center",
-                        color=TEXT, fontsize=8)
-    # Direct labels right of the last checkpoint, centred on each band, nudged apart so they never overlap.
-    ymax = totals[-1] * 1.18
-    centers, base = [], 0.0
-    for layer in layers:
-        centers.append(base + layer[-1] / 2)
-        base += layer[-1]
-    min_gap = 0.075 * ymax
-    for i in range(1, len(centers)):
-        centers[i] = max(centers[i], centers[i - 1] + min_gap)
-    for layer, (_, label, color), y in zip(layers, sources, centers):
-        bottom.plot([xs[-1] + 0.06], [y], marker="s", markersize=7, color=color, clip_on=False)
-        bottom.annotate(f"{label.replace(' (estimate)', '')}  ${layer[-1]:.3f}", (xs[-1] + 0.06, y),
-                        xytext=(8, 0), textcoords="offset points", va="center", color=TEXT, fontsize=8.5,
-                        annotation_clip=False)
-    bottom.set_ylim(0, ymax)
-    bottom.set_ylabel("Cumulative cost (USD)", color=TEXT, fontsize=10)
-    bottom.set_xticks(xs, ["start"] + [f"cp{r['checkpoint']}" for r in rows])
-    bottom.set_xlim(0, n + 0.12)
-    bottom.legend(frameon=False, fontsize=9, labelcolor=TEXT, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.1))
+    def clear(c):
+        return all(abs(c[1] - p[1]) > 0.06 * span or abs(c[2] - p[2]) > 0.08 * y_span for p in placed)
+
+    for c in candidates:
+        if c[0] not in must and clear(c):
+            placed.append(c)
+    for _, x, total, text in placed:
+        ax.annotate(text, (x, total), xytext=(0, 11), textcoords="offset points", ha="center",
+                    color=TEXT, fontsize=8, fontweight="bold",
+                    path_effects=[pe.withStroke(linewidth=3, foreground=SURFACE)])
+    last_cp_x = None
+    for i, (x, r) in enumerate(zip(xs[1:], rows)):
+        if last_cp_x is None or x - last_cp_x > 0.03 * span or i == len(rows) - 1:
+            ax.annotate(f"cp{r['checkpoint']}", (x, 0), xytext=(0, -24), textcoords="offset points",
+                        ha="center", color=TEXT_2, fontsize=7, annotation_clip=False)
+            last_cp_x = x
+
+    # Direct labels right of the curve, centred on each band, nudged apart so they never overlap.
+    ymax = max(totals) * 1.22
+    labels = [(f"random model  {positive_rate:.3f}", BASELINE_FILL, positive_rate / 2)]
+    level = positive_rate
+    for layer, (_, name, color) in zip(gains, SOURCES):
+        labels.append((f"{name}  +{layer[-1]:.3f}", color, level + layer[-1] / 2))
+        level += layer[-1]
+    min_gap = 0.07 * ymax
+    for i in range(1, len(labels)):
+        if labels[i][2] < labels[i - 1][2] + min_gap:
+            labels[i] = (labels[i][0], labels[i][1], labels[i - 1][2] + min_gap)
+    x_end = xs[-1]
+    for text, color, y in labels:
+        ax.annotate("■", (x_end, y), xytext=(14, 0), textcoords="offset points", va="center",
+                    color=color, fontsize=11, annotation_clip=False)
+        ax.annotate(text, (x_end, y), xytext=(28, 0), textcoords="offset points", va="center",
+                    color=TEXT, fontsize=8.5, annotation_clip=False)
+
+    ax.set_xlim(0, x_end)
+    ax.set_ylim(0, ymax)
+    ax.set_xlabel("Cumulative cost (USD)", color=TEXT, fontsize=10, labelpad=22)
+    ax.set_ylabel("Test PR-AUC (held out)", color=TEXT, fontsize=10)
+    ax.set_title("Held-out score vs. spend, by the cost source behind each gain", color=TEXT, fontsize=13,
+                 loc="left", pad=40)
+    ax.text(0, 1.025, "Each checkpoint's score change is split across sources in proportion to what each cost in that "
+            "checkpoint.\nFlat stretches are attempts the agent tried and reverted.", transform=ax.transAxes,
+            color=TEXT_2, fontsize=8.5, va="bottom")
+    handles = [plt.Rectangle((0, 0), 1, 1, color=BASELINE_FILL)] + [plt.Rectangle((0, 0), 1, 1, color=c)
+                                                                    for _, _, c in SOURCES]
+    ax.legend(handles, ["Random model (starting level)"] + [n for _, n, _ in SOURCES], frameon=False,
+              fontsize=9, labelcolor=TEXT, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.17))
     fig.savefig(out, dpi=160, facecolor=SURFACE, bbox_inches="tight")
     plt.close(fig)
 
@@ -230,7 +260,7 @@ def build_reports(run_dir: Path) -> None:
     if best:
         lines.append(f"**Best test PR-AUC {best['test_pr_auc']}** at checkpoint {best['checkpoint']} "
                      f"(random model: {positive_rate}).")
-    lines += ["", *progress_table(rows), "", "![Score and cumulative cost per checkpoint](cost_curve.png)", "",
+    lines += ["", *progress_table(rows), "", "![Held-out score vs spend](cost_curve.png)", "",
               "Per-checkpoint details: `checkpoints/cp_<k>/CHECKPOINT_REPORT.md` (scores, deltas, cost, agent's note, code diff)."]
     report = run_dir / "checkpoints" / f"cp_{cps[-1]['k']}" / "submission" / "REPORT.md"
     if report.exists():

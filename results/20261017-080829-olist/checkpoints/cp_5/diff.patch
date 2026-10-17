@@ -1,0 +1,68 @@
+--- a/CHECKPOINT.md
++++ b/CHECKPOINT.md
+@@ -1,5 +1,5 @@
+-# Checkpoint 4
+-Change: Tried product features (first-item category, total weight, max volume); reverted.
+-Why: Package size/weight and category could affect handling and carrier time.
+-Validation PR-AUC: 0.2184 -> 0.2138 (reverted state: 0.2184)
+-Decision: reverted, PR-AUC dropped 0.0046; the high-cardinality category likely overfits. May retry weight/volume only, without category.
++# Checkpoint 5
++Change: Added payment features (max installments, total payment value, number of payments, main payment type).
++Why: Payment method affects approval delay (e.g. boleto waits for payment), which eats into the promised delivery window.
++Validation PR-AUC: 0.2184 -> 0.2171
++Decision: kept; PR-AUC is -0.0013 (within noise) but ROC-AUC improved 0.6630 -> 0.6701 and the signal is plausible. Revisit at tuning.
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -3,7 +3,7 @@
+ 2. Seller features (done)
+ 3. Geo distance (done, neutral/slightly negative)
+ 4. Product features: tried, worse, reverted (retry weight/volume only later)
+-5. Payment features: type, installments, value
++5. Payment features (done, neutral)
+ 6. Time-ordered seller historical late rate / volume (past-only, out-of-fold)
+ 7. Customer-state/route historical late rate (past-only)
+ 8. Calendar features: month, holidays, est_days vs. typical route time
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -6,5 +6,6 @@
+ - Iter 2: added seller_state, same_state, n_sellers: PR-AUC 0.2205 (ROC-AUC 0.6663, Brier 0.1048)
+ - Iter 3: added dist_km: PR-AUC 0.2184 (ROC-AUC 0.6630, Brier 0.1049), slightly worse, kept (see CHECKPOINT)
+ - Iter 4: product features (category, weight, volume): PR-AUC 0.2138, worse, reverted (back to 0.2184)
++- Iter 5: payment features: PR-AUC 0.2171 (ROC-AUC 0.6701, Brier 0.1050), PR-AUC slightly lower, ROC-AUC higher, kept
+ ## Known weaknesses
+ Minimal baseline; no seller, geo, product or history features. Training data lacks in-transit late orders.
+--- a/features.py
++++ b/features.py
+@@ -10,8 +10,11 @@
+     first = it.sort_values("order_item_id").groupby("order_id").seller_state.first().rename("seller_state")
+     szip = it.sort_values("order_item_id").groupby("order_id").seller_zip_code_prefix.first()
+     nsel = it.groupby("order_id").seller_id.nunique().rename("n_sellers")
++    pay = pd.read_csv(f"{d}/order_payments.csv")
++    pg = pay.groupby("order_id").agg(installments=("payment_installments", "max"), pay_value=("payment_value", "sum"), n_pay=("payment_sequential", "count"))
++    ptype = pay.sort_values("payment_value", ascending=False).groupby("order_id").payment_type.first().rename("pay_type")
+     g = it.groupby("order_id").agg(n_items=("order_item_id", "count"), price=("price", "sum"), freight=("freight_value", "sum"))
+-    g = g.join(first).join(szip).join(nsel)
++    g = g.join(first).join(szip).join(nsel).join(pg).join(ptype)
+     o = o.merge(g, on="order_id", how="left").merge(c[["customer_id", "customer_state", "customer_zip_code_prefix"]], on="customer_id", how="left")
+     geo = pd.read_csv(f"{d}/geolocation.csv").groupby("geolocation_zip_code_prefix")[["geolocation_lat", "geolocation_lng"]].mean()
+     for p, col in (("c", "customer_zip_code_prefix"), ("s", "seller_zip_code_prefix")):
+@@ -27,6 +30,7 @@
+     o["same_state"] = (o.customer_state == o.seller_state).astype(float)
+     o["customer_state"] = o.customer_state.astype("category")
+     o["seller_state"] = o.seller_state.astype("category")
++    o["pay_type"] = o.pay_type.astype("category")
+     return o
+ 
+-FEATS = ["n_items", "price", "freight", "est_days", "hour", "dow", "customer_state", "seller_state", "same_state", "n_sellers", "dist_km"]
++FEATS = ["n_items", "price", "freight", "est_days", "hour", "dow", "customer_state", "seller_state", "same_state", "n_sellers", "dist_km", "installments", "pay_value", "n_pay", "pay_type"]
+--- a/train.py
++++ b/train.py
+@@ -4,7 +4,7 @@
+ o = build(a.data_dir)
+ y = pd.read_csv(f"{a.data_dir}/train_labels.csv")[["order_id", "is_late"]]
+ o = o.merge(y, on="order_id")
+-cats = {c: list(o[c].cat.categories) for c in ["customer_state", "seller_state"]}
++cats = {c: list(o[c].cat.categories) for c in ["customer_state", "seller_state", "pay_type"]}
+ m = lgb.LGBMClassifier(verbose=-1).fit(o[FEATS], o.is_late)
+ os.makedirs(a.model_dir, exist_ok=True)
+ joblib.dump((m, cats), f"{a.model_dir}/model.pkl")

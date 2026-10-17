@@ -8,7 +8,7 @@ All IDs are opaque hashes; they join correctly across tables but do not match an
 - **Prediction time: the moment the order is placed (purchased).** At prediction time you know the order, its items, its payment, the customer, the sellers, and the products. You don't know anything that happens afterwards.
 - **Target:** `is_late = 1` if the order reached the customer on a later calendar day than `order_estimated_delivery_date` (the date promised to the customer at purchase), else `0`.
 - **Population:** orders that were eventually delivered.
-- **Training period:** orders purchased 2016-09-15 → 2018-04-16 (67,821 orders, about 7.8% late).
+- **Training period:** orders purchased 2016-09-15 → 2018-04-13 (64,674 orders, about 6.9% late). The training data is a snapshot taken on 2018-04-16: it contains only orders already delivered by then. Orders placed in the last weeks that were still in transit (disproportionately the late ones) are missing.
 - **Test period:** orders purchased **after** the training period. The test set has the same tables and columns as `/data/train/`, minus `train_labels.csv`.
 
 ## Tables

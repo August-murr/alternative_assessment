@@ -1,0 +1,75 @@
+--- a/CHECKPOINT.md
++++ b/CHECKPOINT.md
+@@ -0,0 +1,5 @@
++# Checkpoint 1
++Change: Minimal baseline, default LightGBM on 7 order-level features.
++Why: Establish a reference score and a working train/predict pipeline.
++Validation PR-AUC: none -> 0.2051
++Decision: kept, it is the baseline.
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -0,0 +1,11 @@
++# Plan (one change per iteration)
++1. Baseline: few order features, default LightGBM (done)
++2. Seller features: seller state, seller-customer same-state flag
++3. Geo distance seller->customer via geolocation
++4. Product features: category, weight, volume
++5. Payment features: type, installments, value
++6. Time-ordered seller historical late rate / volume (past-only, out-of-fold)
++7. Customer-state/route historical late rate (past-only)
++8. Calendar features: month, holidays, est_days vs. typical route time
++9. Hyperparameter tuning (optuna, time-split)
++10. Final tuning/seed averaging, report cleanup
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -0,0 +1,7 @@
++# Report
++## Approach
++LightGBM (defaults) on order-level features: item count, price sum, freight sum, promised days (estimated date - purchase time), purchase hour/day-of-week, customer state. All are known at purchase time and use only the order itself.
++## Validation (pseudo test, last 20%)
++- Iter 1: PR-AUC 0.2051 (ROC-AUC 0.6472, Brier 0.1057)
++## Known weaknesses
++Minimal baseline; no seller, geo, product or history features. Training data lacks in-transit late orders.
+--- a/features.py
++++ b/features.py
+@@ -0,0 +1,16 @@
++import pandas as pd
++
++def build(d):
++    o = pd.read_csv(f"{d}/orders.csv", parse_dates=["order_purchase_timestamp", "order_estimated_delivery_date"])
++    it = pd.read_csv(f"{d}/order_items.csv")
++    c = pd.read_csv(f"{d}/customers.csv")
++    g = it.groupby("order_id").agg(n_items=("order_item_id", "count"), price=("price", "sum"), freight=("freight_value", "sum"))
++    o = o.merge(g, on="order_id", how="left").merge(c[["customer_id", "customer_state"]], on="customer_id", how="left")
++    t = o.order_purchase_timestamp
++    o["est_days"] = (o.order_estimated_delivery_date - t).dt.total_seconds() / 86400
++    o["hour"] = t.dt.hour
++    o["dow"] = t.dt.dayofweek
++    o["customer_state"] = o.customer_state.astype("category")
++    return o
++
++FEATS = ["n_items", "price", "freight", "est_days", "hour", "dow", "customer_state"]
+--- a/predict.py
++++ b/predict.py
+@@ -0,0 +1,8 @@
++import argparse, joblib, pandas as pd
++from features import build, FEATS
++a = argparse.ArgumentParser(); a.add_argument("--model-dir"); a.add_argument("--data-dir"); a.add_argument("--output"); a = a.parse_args()
++m, cats = joblib.load(f"{a.model_dir}/model.pkl")
++o = build(a.data_dir)
++o["customer_state"] = pd.Categorical(o.customer_state.astype(object), categories=cats)
++o["p_late"] = m.predict_proba(o[FEATS])[:, 1]
++o[["order_id", "p_late"]].to_csv(a.output, index=False)
+--- a/train.py
++++ b/train.py
+@@ -0,0 +1,10 @@
++import argparse, os, joblib, pandas as pd, lightgbm as lgb
++from features import build, FEATS
++a = argparse.ArgumentParser(); a.add_argument("--data-dir"); a.add_argument("--model-dir"); a = a.parse_args()
++o = build(a.data_dir)
++y = pd.read_csv(f"{a.data_dir}/train_labels.csv")[["order_id", "is_late"]]
++o = o.merge(y, on="order_id")
++cats = list(o.customer_state.cat.categories)
++m = lgb.LGBMClassifier(verbose=-1).fit(o[FEATS], o.is_late)
++os.makedirs(a.model_dir, exist_ok=True)
++joblib.dump((m, cats), f"{a.model_dir}/model.pkl")

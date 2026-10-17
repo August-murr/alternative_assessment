@@ -101,7 +101,10 @@ def main() -> None:
     # Last test_fraction of orders by purchase time -> test. Ties at the boundary go to test.
     boundary = kept["order_purchase_timestamp"].iloc[int(len(kept) * (1 - cfg.data.test_fraction))]
     is_test = kept["order_purchase_timestamp"] >= boundary
-    split_ids = {"train": set(kept.loc[~is_test, "order_id"]), "test": set(kept.loc[is_test, "order_id"])}
+    # Label embargo: a training order whose delivery happened after the boundary had an unknown outcome
+    # when the test period began. Keeping it would leak test-period delivery conditions into training.
+    unresolved = ~is_test & (kept["order_delivered_customer_date"] > boundary)
+    split_ids = {"train": set(kept.loc[~is_test & ~unresolved, "order_id"]), "test": set(kept.loc[is_test, "order_id"])}
 
     items = read(raw, "olist_order_items_dataset").drop(columns=["shipping_limit_date"])
     payments = read(raw, "olist_order_payments_dataset")
@@ -166,6 +169,8 @@ def main() -> None:
         "censor": censor_info,
         "orders_total_delivered": len(delivered),
         "orders_dropped_by_censor_cutoff": len(delivered) - len(kept),
+        "train_orders_dropped_by_label_embargo": int(unresolved.sum()),
+        "label_embargo": "train orders delivered after split_boundary are dropped (outcome unknown at that time)",
         "ids_rekeyed": cfg.data.rekey_ids,
         "dropped": DROPPED,
         "splits": stats,

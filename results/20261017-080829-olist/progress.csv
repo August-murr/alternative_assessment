@@ -1,0 +1,11 @@
+checkpoint,status,fix_attempts,change,val_pr_auc,test_pr_auc,test_roc_auc,test_brier,api_cost,modal_agent_cost,modal_eval_cost,total_cost,cumulative_cost,agent_minutes,tool_calls,lines_added,lines_removed
+1,passed,0,"Minimal baseline, default LightGBM on 7 order-level features.",0.2051,0.0953,0.7097,0.0366,0.0528,0.0096,0.0019,0.0644,0.0644,0.8,4,57,0
+2,passed,0,"Added seller features (seller state of first item, same-state flag, number of sellers).",0.2205,0.1043,0.7363,0.0364,0.0262,0.0064,0.0023,0.0348,0.0992,0.5,2,18,9
+3,passed,0,Added seller-to-customer haversine distance (km) from mean geolocation per zip prefix.,0.2184,0.1079,0.7454,0.0364,0.0302,0.0073,0.0023,0.0398,0.139,0.6,2,20,10
+4,passed,0,"Tried product features (first-item category, total weight, max volume); reverted.",0.2184,0.1079,0.7454,0.0364,0.0728,0.0189,0.0018,0.0935,0.2325,1.5,7,7,6
+5,passed,0,"Added payment features (max installments, total payment value, number of payments, main payment type).",0.2171,0.1163,0.7478,0.0361,0.038,0.0112,0.0023,0.0516,0.2841,0.9,4,14,9
+6,passed,0,"Tried past-only seller history (seller order count and smoothed late rate, using only orders delivered before each purchase); reverted from FEATS.",0.2171,0.1163,0.7478,0.0361,0.0821,0.0196,0.0022,0.1039,0.3881,1.6,7,43,13
+7,passed,0,"Tried calendar features (purchase month, day of month, promised-date weekday); reverted from FEATS.",0.2171,0.1163,0.7478,0.0361,0.0415,0.0131,0.0031,0.0577,0.4457,1.0,4,10,6
+8,passed,0,"Regularized LightGBM (300 trees, lr 0.02, 15 leaves, min_child_samples 100, subsampling, L2 5) instead of defaults.",0.2318,0.1238,0.7688,0.0355,0.0269,0.0077,0.0028,0.0373,0.4831,0.6,2,8,7
+9,passed,0,"Retried product size features without category (total weight, max package volume); reverted from FEATS.",0.2318,0.1238,0.7688,0.0355,0.0296,0.0106,0.003,0.0432,0.5263,0.8,2,12,6
+10,passed,0,Averaged 5 LightGBM models trained with different random seeds.,0.232,0.1229,0.7675,0.0356,0.0451,0.0105,0.0026,0.0582,0.5845,0.8,2,47,20

@@ -1,0 +1,114 @@
+--- a/CHECKPOINT.md
++++ b/CHECKPOINT.md
+@@ -1,5 +1,5 @@
+-# Checkpoint 5
+-Change: Added payment features (max installments, total payment value, number of payments, main payment type).
+-Why: Payment method affects approval delay (e.g. boleto waits for payment), which eats into the promised delivery window.
+-Validation PR-AUC: 0.2184 -> 0.2171
+-Decision: kept; PR-AUC is -0.0013 (within noise) but ROC-AUC improved 0.6630 -> 0.6701 and the signal is plausible. Revisit at tuning.
++# Checkpoint 6
++Change: Tried past-only seller history (seller order count and smoothed late rate, using only orders delivered before each purchase); reverted from FEATS.
++Why: Sellers differ persistently in lateness, so their track record should predict it.
++Validation PR-AUC: 0.2171 -> 0.2048 (reverted state: 0.2171)
++Decision: reverted, PR-AUC dropped 0.0123. Likely train/test mismatch: training rows see a short, noisy history, test rows see the full one. The helper code stays in features.py but is not used as features. Also fixed a bug where pay_type was never made categorical (no score change).
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -4,7 +4,7 @@
+ 3. Geo distance (done, neutral/slightly negative)
+ 4. Product features: tried, worse, reverted (retry weight/volume only later)
+ 5. Payment features (done, neutral)
+-6. Time-ordered seller historical late rate / volume (past-only, out-of-fold)
++6. Seller history: tried, worse, not used (history mismatch between train and test; maybe retry with out-of-fold)
+ 7. Customer-state/route historical late rate (past-only)
+ 8. Calendar features: month, holidays, est_days vs. typical route time
+ 9. Hyperparameter tuning (optuna, time-split)
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -7,5 +7,6 @@
+ - Iter 3: added dist_km: PR-AUC 0.2184 (ROC-AUC 0.6630, Brier 0.1049), slightly worse, kept (see CHECKPOINT)
+ - Iter 4: product features (category, weight, volume): PR-AUC 0.2138, worse, reverted (back to 0.2184)
+ - Iter 5: payment features: PR-AUC 0.2171 (ROC-AUC 0.6701, Brier 0.1050), PR-AUC slightly lower, ROC-AUC higher, kept
++- Iter 6: past-only seller history (count, smoothed late rate): PR-AUC 0.2048, worse, not used (back to 0.2171). Also fixed pay_type dtype bug, no score effect.
+ ## Known weaknesses
+ Minimal baseline; no seller, geo, product or history features. Training data lacks in-transit late orders.
+--- a/features.py
++++ b/features.py
+@@ -8,13 +8,14 @@
+     s = pd.read_csv(f"{d}/sellers.csv")
+     it = it.merge(s[["seller_id", "seller_state", "seller_zip_code_prefix"]], on="seller_id", how="left")
+     first = it.sort_values("order_item_id").groupby("order_id").seller_state.first().rename("seller_state")
++    fsel = it.sort_values("order_item_id").groupby("order_id").seller_id.first().rename("seller_id")
+     szip = it.sort_values("order_item_id").groupby("order_id").seller_zip_code_prefix.first()
+     nsel = it.groupby("order_id").seller_id.nunique().rename("n_sellers")
+     pay = pd.read_csv(f"{d}/order_payments.csv")
+     pg = pay.groupby("order_id").agg(installments=("payment_installments", "max"), pay_value=("payment_value", "sum"), n_pay=("payment_sequential", "count"))
+     ptype = pay.sort_values("payment_value", ascending=False).groupby("order_id").payment_type.first().rename("pay_type")
+     g = it.groupby("order_id").agg(n_items=("order_item_id", "count"), price=("price", "sum"), freight=("freight_value", "sum"))
+-    g = g.join(first).join(szip).join(nsel).join(pg).join(ptype)
++    g = g.join(first).join(fsel).join(szip).join(nsel).join(pg).join(ptype)
+     o = o.merge(g, on="order_id", how="left").merge(c[["customer_id", "customer_state", "customer_zip_code_prefix"]], on="customer_id", how="left")
+     geo = pd.read_csv(f"{d}/geolocation.csv").groupby("geolocation_zip_code_prefix")[["geolocation_lat", "geolocation_lng"]].mean()
+     for p, col in (("c", "customer_zip_code_prefix"), ("s", "seller_zip_code_prefix")):
+@@ -33,4 +34,31 @@
+     o["pay_type"] = o.pay_type.astype("category")
+     return o
+ 
++K = 10
++
++def hist_train(o, lab):
++    """Past-only seller stats: only orders already delivered before this purchase count."""
++    lab = lab.copy()
++    lab["dd"] = pd.to_datetime(lab.delivered_customer_date)
++    o = o.merge(lab[["order_id", "is_late", "dd"]], on="order_id")
++    prior = o.is_late.mean()
++    n = np.zeros(len(o)); late = np.zeros(len(o))
++    pos = {i: k for k, i in enumerate(o.index)}
++    for sid, grp in o.groupby("seller_id"):
++        dg = grp.dropna(subset=["dd"]).sort_values("dd")
++        dts = dg.dd.values; cs = np.concatenate([[0], np.cumsum(dg.is_late.values)])
++        idx = np.searchsorted(dts, grp.order_purchase_timestamp.values, side="left")
++        ii = [pos[i] for i in grp.index]
++        n[ii] = idx; late[ii] = cs[idx]
++    o["seller_n"] = n
++    o["seller_late"] = (late + prior * K) / (n + K)
++    table = o.groupby("seller_id").agg(n=("is_late", "count"), late=("is_late", "sum"))
++    return o, table, prior
++
++def hist_apply(o, table, prior):
++    t = o[["seller_id"]].join(table, on="seller_id")
++    o["seller_n"] = t.n.fillna(0).values
++    o["seller_late"] = ((t.late.fillna(0) + prior * K) / (t.n.fillna(0) + K)).values
++    return o
++
+ FEATS = ["n_items", "price", "freight", "est_days", "hour", "dow", "customer_state", "seller_state", "same_state", "n_sellers", "dist_km", "installments", "pay_value", "n_pay", "pay_type"]
+--- a/predict.py
++++ b/predict.py
+@@ -1,8 +1,9 @@
+ import argparse, joblib, pandas as pd
+-from features import build, FEATS
++from features import build, FEATS, hist_apply
+ a = argparse.ArgumentParser(); a.add_argument("--model-dir"); a.add_argument("--data-dir"); a.add_argument("--output"); a = a.parse_args()
+-m, cats = joblib.load(f"{a.model_dir}/model.pkl")
++m, cats, table, prior = joblib.load(f"{a.model_dir}/model.pkl")
+ o = build(a.data_dir)
++o = hist_apply(o, table, prior)
+ for c, cc in cats.items():
+     o[c] = pd.Categorical(o[c].astype(object), categories=cc)
+ o["p_late"] = m.predict_proba(o[FEATS])[:, 1]
+--- a/train.py
++++ b/train.py
+@@ -1,10 +1,10 @@
+ import argparse, os, joblib, pandas as pd, lightgbm as lgb
+-from features import build, FEATS
++from features import build, FEATS, hist_train
+ a = argparse.ArgumentParser(); a.add_argument("--data-dir"); a.add_argument("--model-dir"); a = a.parse_args()
+ o = build(a.data_dir)
+-y = pd.read_csv(f"{a.data_dir}/train_labels.csv")[["order_id", "is_late"]]
+-o = o.merge(y, on="order_id")
++lab = pd.read_csv(f"{a.data_dir}/train_labels.csv")
++o, table, prior = hist_train(o, lab)
+ cats = {c: list(o[c].cat.categories) for c in ["customer_state", "seller_state", "pay_type"]}
+ m = lgb.LGBMClassifier(verbose=-1).fit(o[FEATS], o.is_late)
+ os.makedirs(a.model_dir, exist_ok=True)
+-joblib.dump((m, cats), f"{a.model_dir}/model.pkl")
++joblib.dump((m, cats, table, prior), f"{a.model_dir}/model.pkl")

@@ -88,6 +88,7 @@ Full evidence is in [LEAKAGE.md](LEAKAGE.md). In short:
   - the seller shipping deadline, which turned out to be approval time plus N days
 - **Temporal split:** the last 20% of orders by purchase time are the test set (train 2016-09 → 2018-04-16, test → 2018-07-04).
 - **Right-censoring guard:** orders purchased after 2018-07-05 are dropped. Near the data snapshot, late orders hadn't been delivered yet, which biased the tail toward on-time.
+- **Label embargo:** training orders delivered after the split boundary are dropped (3,147 orders, 27.5% of them late), because their outcomes weren't known when the test period began. The training data is exactly what was knowable on 2018-04-16.
 - **Salted ID re-keying:** a submission can't embed a lookup from public Kaggle IDs to labels.
 - The agent sees `train/` and [tasks/olist/DATA.md](../tasks/olist/DATA.md). `DATA.md` contains no test-set statistics.
 - The prompt adds rules that the data can't enforce:
@@ -161,7 +162,7 @@ The agent can run `validate-submission` itself at any time, and the prompt requi
   - Image build time isn't counted (images are cached).
 - **Outputs:**
   - `progress.csv`: per-checkpoint scores and cost components
-  - `cost_curve.png`: two aligned panels, score per checkpoint on top and cumulative cost stacked by source (Claude API, Modal agent sandbox, Modal eval sandbox) below
+  - `cost_curve.png`: test PR-AUC against cumulative spend, with the area stacked by cost source. Each checkpoint's score change is split across Claude API, Modal agent sandbox and Modal eval sandbox in proportion to that checkpoint's spend; the grey base band is the random-model level.
 
 ## 9. Agent restrictions
 

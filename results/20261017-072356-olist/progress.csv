@@ -1,4 +1,0 @@
-checkpoint,status,fix_attempts,change,val_pr_auc,test_pr_auc,test_roc_auc,test_brier,api_cost,modal_agent_cost,modal_eval_cost,total_cost,cumulative_cost,agent_minutes,tool_calls,lines_added,lines_removed
-1,passed,0,"minimal baseline, default LightGBM on 9 order-level features",0.2564,0.0861,0.7125,0.036,0.0889,0.0127,0.0016,0.1032,0.1032,1.0,4,46,0
-2,passed,0,"added seller-customer geo features (max/mean haversine distance, same-state flag)",0.264,0.0933,0.725,0.0357,0.0284,0.0098,0.0028,0.041,0.1443,0.8,2,23,6
-3,passed,0,"regularized LightGBM (300 trees, lr 0.03, 15 leaves, min_child 50, subsampling, L2=5)",0.2963,0.112,0.7544,0.0351,0.0268,0.0101,0.0029,0.0398,0.184,0.8,2,25,17

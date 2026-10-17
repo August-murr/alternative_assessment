@@ -1,0 +1,72 @@
+{
+  "k": 3,
+  "status": "passed",
+  "fix_attempts": 0,
+  "calls": [
+    {
+      "kind": "iterate",
+      "exit_code": 0,
+      "session_id": "9682a4bc-8d6d-4dc6-a3b1-b8962c37fb3b",
+      "tool_calls": 2,
+      "subtype": "success",
+      "num_turns": 3,
+      "duration_ms": 22932,
+      "total_cost_usd": 0.1091979,
+      "usage": {
+        "input_tokens": 6,
+        "output_tokens": 1637,
+        "cache_creation_input_tokens": 2111,
+        "cache_read_input_tokens": 53698
+      },
+      "stderr_tail": "\u26a0 Permission mode forced to default \u2014 CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set (allowed_non_write_users hardening). Declare allowedTools explicitly, or set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0 to opt out.\n"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "scores": {
+      "pr_auc": 0.2184,
+      "roc_auc": 0.663,
+      "brier": 0.1049,
+      "positive_rate": 0.1193
+    },
+    "network_isolated": true,
+    "output_tail": "building pseudo split from /data/train (last 20% of orders held out) ...\nrunning submission (train limit 1200s, predict limit 300s) ...\n\n=== validate-submission ===\ntrain: ok in 2.1s (limit 1200s)\npredict: ok in 1.9s (limit 300s)\nscores on pseudo test (12935 orders): {\"pr_auc\": 0.2184, \"roc_auc\": 0.663, \"brier\": 0.1049, \"positive_rate\": 0.1193}\nPASSED: the submission format is valid. (These scores are not the final test score.)\n"
+  },
+  "change": "Added seller-to-customer haversine distance (km) from mean geolocation per zip prefix.",
+  "diff": {
+    "lines_added": 20,
+    "lines_removed": 10
+  },
+  "api_cost_cumulative": 0.1091979,
+  "api_cost": 0.030195799999999995,
+  "agent_seconds": 34.42807674407959,
+  "eval": {
+    "passed": true,
+    "network_blocked": true,
+    "test_scores": {
+      "pr_auc": 0.1079,
+      "roc_auc": 0.7454,
+      "brier": 0.0364,
+      "n_orders": 16956,
+      "positive_rate": 0.0378
+    },
+    "sandbox_seconds": 10.9,
+    "file_errors": [],
+    "prediction_errors": [],
+    "steps": [
+      {
+        "step": "train",
+        "status": "ok",
+        "seconds": 3.4
+      },
+      {
+        "step": "predict",
+        "status": "ok",
+        "seconds": 2.5
+      }
+    ]
+  },
+  "modal_agent_cost": 0.007265701316070556,
+  "modal_eval_cost": 0.002300336,
+  "total_cost": 0.03976183731607055
+}

@@ -1,0 +1,44 @@
+--- a/CHECKPOINT.md
++++ b/CHECKPOINT.md
+@@ -1,5 +1,5 @@
+-# Checkpoint 6
+-Change: Tried past-only seller history (seller order count and smoothed late rate, using only orders delivered before each purchase); reverted from FEATS.
+-Why: Sellers differ persistently in lateness, so their track record should predict it.
+-Validation PR-AUC: 0.2171 -> 0.2048 (reverted state: 0.2171)
+-Decision: reverted, PR-AUC dropped 0.0123. Likely train/test mismatch: training rows see a short, noisy history, test rows see the full one. The helper code stays in features.py but is not used as features. Also fixed a bug where pay_type was never made categorical (no score change).
++# Checkpoint 7
++Change: Tried calendar features (purchase month, day of month, promised-date weekday); reverted from FEATS.
++Why: Seasonal peaks and holidays may raise late rates.
++Validation PR-AUC: 0.2171 -> 0.1779 (reverted state: 0.2171)
++Decision: reverted, PR-AUC dropped 0.039. Training covers each calendar month once or twice, so month/day-of-month mostly memorize specific past events and don't generalize to a later period.
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -6,6 +6,6 @@
+ 5. Payment features (done, neutral)
+ 6. Seller history: tried, worse, not used (history mismatch between train and test; maybe retry with out-of-fold)
+ 7. Customer-state/route historical late rate (past-only)
+-8. Calendar features: month, holidays, est_days vs. typical route time
++8. Calendar features: tried, much worse, not used (memorizes past events)
+ 9. Hyperparameter tuning (optuna, time-split)
+ 10. Final tuning/seed averaging, report cleanup
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -8,5 +8,6 @@
+ - Iter 4: product features (category, weight, volume): PR-AUC 0.2138, worse, reverted (back to 0.2184)
+ - Iter 5: payment features: PR-AUC 0.2171 (ROC-AUC 0.6701, Brier 0.1050), PR-AUC slightly lower, ROC-AUC higher, kept
+ - Iter 6: past-only seller history (count, smoothed late rate): PR-AUC 0.2048, worse, not used (back to 0.2171). Also fixed pay_type dtype bug, no score effect.
++- Iter 7: calendar features (month, day of month, est weekday): PR-AUC 0.1779, much worse, not used (back to 0.2171)
+ ## Known weaknesses
+ Minimal baseline; no seller, geo, product or history features. Training data lacks in-transit late orders.
+--- a/features.py
++++ b/features.py
+@@ -28,6 +28,9 @@
+     o["est_days"] = (o.order_estimated_delivery_date - t).dt.total_seconds() / 86400
+     o["hour"] = t.dt.hour
+     o["dow"] = t.dt.dayofweek
++    o["month"] = t.dt.month
++    o["dom"] = t.dt.day
++    o["est_dow"] = o.order_estimated_delivery_date.dt.dayofweek
+     o["same_state"] = (o.customer_state == o.seller_state).astype(float)
+     o["customer_state"] = o.customer_state.astype("category")
+     o["seller_state"] = o.seller_state.astype("category")

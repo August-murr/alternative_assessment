@@ -1,0 +1,33 @@
+--- a/CHECKPOINT.md
++++ b/CHECKPOINT.md
+@@ -1,5 +1,5 @@
+-# Checkpoint 3
+-Change: Added seller-to-customer haversine distance (km) from mean geolocation per zip prefix.
+-Why: Distance is a main driver of shipping time and promised-date tightness.
+-Validation PR-AUC: 0.2205 -> 0.2184
+-Decision: kept, although slightly worse (-0.0021, within likely noise for ~1.5k positives); distance is causally meaningful and later route/history features build on it. Revisit if it keeps hurting.
++# Checkpoint 4
++Change: Tried product features (first-item category, total weight, max volume); reverted.
++Why: Package size/weight and category could affect handling and carrier time.
++Validation PR-AUC: 0.2184 -> 0.2138 (reverted state: 0.2184)
++Decision: reverted, PR-AUC dropped 0.0046; the high-cardinality category likely overfits. May retry weight/volume only, without category.
+--- a/PLAN.md
++++ b/PLAN.md
+@@ -2,7 +2,7 @@
+ 1. Baseline: few order features, default LightGBM (done)
+ 2. Seller features (done)
+ 3. Geo distance (done, neutral/slightly negative)
+-4. Product features: category, weight, volume
++4. Product features: tried, worse, reverted (retry weight/volume only later)
+ 5. Payment features: type, installments, value
+ 6. Time-ordered seller historical late rate / volume (past-only, out-of-fold)
+ 7. Customer-state/route historical late rate (past-only)
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -5,5 +5,6 @@
+ - Iter 1: PR-AUC 0.2051 (ROC-AUC 0.6472, Brier 0.1057)
+ - Iter 2: added seller_state, same_state, n_sellers: PR-AUC 0.2205 (ROC-AUC 0.6663, Brier 0.1048)
+ - Iter 3: added dist_km: PR-AUC 0.2184 (ROC-AUC 0.6630, Brier 0.1049), slightly worse, kept (see CHECKPOINT)
++- Iter 4: product features (category, weight, volume): PR-AUC 0.2138, worse, reverted (back to 0.2184)
+ ## Known weaknesses
+ Minimal baseline; no seller, geo, product or history features. Training data lacks in-transit late orders.

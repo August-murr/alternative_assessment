@@ -32,8 +32,14 @@ Population: orders with status `delivered` and a non-null delivery date (96,470 
 
 | Split | Orders | Purchase window | Late rate |
 |---|---|---|---|
-| train | 67,821 | 2016-09-15 → 2018-04-16 | 7.8% |
+| train | 64,674 | 2016-09-15 → 2018-04-13 | 6.9% |
 | test | 16,956 | 2018-04-16 → 2018-07-04 | 3.8% |
+
+### Label embargo (added after the first 10-iteration run)
+- Training orders purchased before the boundary but **delivered after it** had an unknown outcome when the test period began. There were 3,147 of them (4.6%), and 27.5% of them were late, against 7.8% overall, because late orders are exactly the ones still in transit. Many were delayed by the May 2018 strike, which falls inside the test window.
+- Keeping them leaked test-period delivery conditions into training. Any feature built from historical outcomes, such as a seller's late rate, carried that information into predictions.
+- They are now dropped, so the training data is exactly what was knowable on 2018-04-16. The test set is unchanged.
+- The leak was found by reading the agent's time-aware seller-history code (see [REPORT.md](REPORT.md)).
 
 The test window includes the May 2018 truckers' strike, and its late rate is half the train rate. That distribution shift is real and intentional, so PR-AUC on test will look lower than an in-train random CV suggests.
 

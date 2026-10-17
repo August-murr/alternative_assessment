@@ -13,7 +13,7 @@ modal:
   timeout_s: 3600            # hard wall-clock limit for the agent sandbox (covers all iterations)
 
 agent:
-  iterations: 3              # checkpoints per run; 1 = one-shot
+  iterations: 10             # checkpoints per run; 1 = one-shot
   iteration_timeout_s: 900   # limit for one claude -p call (one iteration or one fix attempt)
   max_fix_attempts: 2        # extra calls allowed when a checkpoint fails verification
   model: claude-sonnet-5-5
